@@ -1,0 +1,8 @@
+ROADMAP ONLY
+
+Planned verifier instruction:
+- Check speech consistency against game facts.
+- Return structured judgment fields:
+  - factual_consistency
+  - strategic_coherence
+  - final_judge: accept/reject

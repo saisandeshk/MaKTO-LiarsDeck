@@ -1,0 +1,11 @@
+# ROADMAP ONLY
+#
+# Planned fields:
+# all_candidates:
+#   - model_type: ...
+#     model_params: ...
+#     sample_ratio: ...
+#
+# env_config:
+#   game_type: liars_deck
+#   num_players: 4

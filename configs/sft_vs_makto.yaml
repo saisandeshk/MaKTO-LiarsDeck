@@ -1,0 +1,16 @@
+# ROADMAP ONLY
+#
+# Planned fields:
+# env_config:
+#   game_type: liars_deck
+#   num_players: 4
+#   ruleset: basic
+#   seed: 42
+#
+# agent_config:
+#   side_a:
+#     model_type: sft_agent
+#     model_params: {...}
+#   side_b:
+#     model_type: makto_agent
+#     model_params: {...}
