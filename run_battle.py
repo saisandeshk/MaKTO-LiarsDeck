@@ -77,6 +77,61 @@ def _make_trace_row(env: LiarsDeckTextEnvV0, obs: Dict[str, Any], player_id: int
 	}
 
 
+def _safe_play_action(obs: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+	hand = list(obs.get("private_state", {}).get("self_hand", []))
+	table_rank = obs.get("public_state", {}).get("table_rank", "K")
+
+	if not hand:
+		return {"type": "call_liar"}
+
+	raw_cards = candidate.get("cards", []) if isinstance(candidate, dict) else []
+	if not isinstance(raw_cards, list):
+		raw_cards = []
+
+	remaining = list(hand)
+	cards: list = []
+	for card in raw_cards:
+		if card in remaining and len(cards) < 3:
+			cards.append(card)
+			remaining.remove(card)
+
+	if len(cards) == 0:
+		cards = [hand[0]]
+
+	claimed_rank = candidate.get("claimed_rank", table_rank) if isinstance(candidate, dict) else table_rank
+	if claimed_rank not in ["K", "Q", "A"]:
+		claimed_rank = table_rank
+
+	return {
+		"type": "play",
+		"cards": cards,
+		"claimed_rank": claimed_rank,
+		"claimed_count": len(cards),
+	}
+
+
+def _sanitize_action(obs: Dict[str, Any], action: Any) -> Dict[str, Any]:
+	valid_types = {item[0] for item in obs.get("valid_action", []) if isinstance(item, (list, tuple)) and len(item) >= 1}
+
+	if not isinstance(action, dict):
+		action = {}
+
+	action_type = action.get("type")
+	if action_type == "call_liar" and "call_liar" in valid_types:
+		return {"type": "call_liar"}
+
+	if action_type == "play" and "play" in valid_types:
+		return _safe_play_action(obs, action)
+
+	if "play" in valid_types:
+		return _safe_play_action(obs, action)
+
+	if "call_liar" in valid_types:
+		return {"type": "call_liar"}
+
+	return {"type": "call_liar"}
+
+
 def run_one_game(config: Dict[str, Any], log_save_path: str, seed_override=None, max_steps=4000):
 	env_cfg = config.get("env_config", {})
 	num_players = int(env_cfg.get("num_players", 4))
@@ -103,7 +158,8 @@ def run_one_game(config: Dict[str, Any], log_save_path: str, seed_override=None,
 		obs = env.get_observation()
 		player_id = obs["current_act_idx"]
 		agent = agents[player_id]
-		action = agent.act(obs)
+		raw_action = agent.act(obs)
+		action = _sanitize_action(obs, raw_action)
 		env.record_player_trace(player_id, _make_trace_row(env, obs, player_id, action))
 		_, _, done, _ = env.step(action)
 		step_count += 1
