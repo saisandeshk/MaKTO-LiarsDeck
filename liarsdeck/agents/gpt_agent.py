@@ -1,1 +1,5 @@
-"""ROADMAP ONLY: API-backed agent wrapper."""
+from liarsdeck.agents.llm_agent import LLMAgent
+
+
+class GPTAgent(LLMAgent):
+	pass
