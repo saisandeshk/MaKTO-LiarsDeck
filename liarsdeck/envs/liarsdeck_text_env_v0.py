@@ -130,6 +130,8 @@ class LiarsDeckTextEnvV0(gym.Env):
 
 		for player_id in range(1, self.num_players + 1):
 			trace_path = os.path.join(self.log_save_path, f"Player_{player_id}.jsonl")
+			# Always create the file to satisfy schema contract, even if no rows were produced.
+			open(trace_path, "a", encoding="utf-8").close()
 			for row in self.player_trace_buffer.get(player_id, []):
 				append_jsonl(trace_path, row)
 

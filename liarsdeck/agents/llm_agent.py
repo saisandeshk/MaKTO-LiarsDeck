@@ -93,7 +93,7 @@ class LLMAgent(Agent):
           "selected_action": selected_action,
           "latency_ms": latency_ms,
           "gen_times": 1,
-          "message": observation.get("phase"),
+          "obs_message": observation.get("phase"),
         },
       )
     return selected_action

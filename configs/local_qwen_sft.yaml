@@ -8,7 +8,10 @@ env_config:
 
 agent_config:
   default_model:
-    model_type: random
+    model_type: sft_agent
     model_params:
-      provider: local
-      seed: 42
+      provider: local_vllm
+      ip: 127.0.0.1
+      port: 8000
+      llm: Qwen/Qwen3.5-9B
+      temperature: 0.2
