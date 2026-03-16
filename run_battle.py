@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 from typing import Any, Dict
 
 import yaml
@@ -25,11 +26,12 @@ def _build_agents(num_players: int, agent_config: Dict[str, Any], log_save_path:
 		if model_type == "random":
 			agent = RandomAgent(seed=model_params.get("seed"))
 		else:
-			log_file = os.path.join(log_save_path, f"Player_{player_id}.jsonl")
+			# Keep Player_<id>.jsonl reserved for runner-level unified trace schema.
+			# Do not pass raw model log file here to avoid mixing incompatible row formats.
 			agent = AGENT_REGISTRY.build_agent(
 				model_type=model_type,
 				model_params=model_params,
-				log_file=log_file,
+				log_file=None,
 			)
 			if getattr(agent, "client", None) is None:
 				raise RuntimeError(
@@ -74,6 +76,196 @@ def _make_trace_row(env: LiarsDeckTextEnvV0, obs: Dict[str, Any], player_id: int
 		"action_parse_status": "ok",
 		"gen_times": 1,
 		"latency_ms": 0,
+	}
+
+
+def _make_speech_trace_row(
+	env: LiarsDeckTextEnvV0,
+	obs: Dict[str, Any],
+	player_id: int,
+	speech_text: str,
+	speech_prompt: str,
+	reasoning_trace: str,
+) -> Dict[str, Any]:
+	return {
+		"game_id": env.game.game_id,
+		"event_id": env.game.event_id,
+		"player_id": player_id,
+		"phase": f"{obs['phase']}_speech",
+		"message": f"{obs['phase']}_speech",
+		"prompt": speech_prompt,
+		"observation_summary": {
+			"table_rank": obs["public_state"]["table_rank"],
+			"pile_size": obs["public_state"]["pile_size"],
+			"alive_players": [
+				int(pid)
+				for pid, status in obs["public_state"]["players_status"].items()
+				if status["is_alive"]
+			],
+			"self_card_count": len(obs["private_state"]["self_hand"]),
+		},
+		"valid_actions": [{"type": "speech", "payload": "public_text"}],
+		"response": speech_text,
+		"selected_action": {"type": "speech", "text": speech_text},
+		"reasoning_trace": reasoning_trace,
+		"action_parse_status": "ok",
+		"gen_times": 1,
+		"latency_ms": 0,
+	}
+
+
+def _extract_reasoning_trace(agent: Any, raw_action: Any) -> str:
+	if isinstance(raw_action, dict):
+		for key in ["reason", "reasoning", "analysis", "thought", "rationale", "explanation"]:
+			value = raw_action.get(key)
+			if isinstance(value, str) and value.strip():
+				return value.strip()
+
+	response_text = getattr(agent, "last_response_text", "")
+	if isinstance(response_text, str) and response_text.strip():
+		clean_text = response_text.strip()
+		clean_text = re.sub(r"```(?:json)?", "", clean_text)
+		clean_text = clean_text.replace("```", "").strip()
+		return clean_text
+
+	return ""
+
+
+def _shorten_reasoning_trace(reasoning_trace: str, max_chars: int = 420) -> str:
+	text = (reasoning_trace or "").strip()
+	if len(text) <= max_chars:
+		return text
+	return text[:max_chars].rstrip() + " ..."
+
+
+def _fallback_speech_text(action: Dict[str, Any], obs: Dict[str, Any], max_chars: int) -> str:
+	action_type = action.get("type", "play")
+	if action_type == "call_liar":
+		text = "I challenge that last claim."
+	else:
+		claimed_rank = action.get("claimed_rank", obs.get("public_state", {}).get("table_rank", "K"))
+		claimed_count = action.get("claimed_count", len(action.get("cards", [])) if isinstance(action.get("cards", []), list) else 1)
+		text = f"I play {claimed_count} card(s) as {claimed_rank}."
+	return text[:max_chars]
+
+
+def _clean_public_speech(
+	raw_text: str,
+	planned_action: Dict[str, Any],
+	obs: Dict[str, Any],
+	max_chars: int,
+	max_sentences: int = 2,
+) -> str:
+	text = (raw_text or "").strip()
+	if not text:
+		return _fallback_speech_text(planned_action, obs, max_chars)
+
+	text = re.sub(r"```(?:json|text|markdown)?", "", text, flags=re.I)
+	text = text.replace("```", "")
+	text = re.sub(r"\{\s*\"type\"\s*:\s*\"(play|call_liar|speech)\".*?\}", "", text, flags=re.I | re.S)
+
+	lines = [line.strip() for line in text.splitlines() if line.strip()]
+	filtered: list[str] = []
+	blocked_markers = [
+		"thinking process",
+		"analyze the request",
+		"analysis:",
+		"current state:",
+		"final check",
+		"decision:",
+		"let me analyze",
+		"reasoning_trace",
+		"output format",
+	]
+	for line in lines:
+		line_lower = line.lower()
+		if any(marker in line_lower for marker in blocked_markers):
+			continue
+		if re.match(r"^\d+[\).:\-]\s*", line):
+			continue
+		if line.startswith(("-", "*", "#", "**")):
+			continue
+		if len(line) < 3:
+			continue
+		filtered.append(line)
+
+	text = " ".join(filtered).strip()
+	text = re.sub(r"\s+", " ", text)
+	text = re.sub(r"[*_`#]", "", text)
+
+	# Keep only the first few natural sentences.
+	sentences = re.split(r"(?<=[.!?])\s+", text)
+	sentences = [s.strip() for s in sentences if s.strip()]
+	if len(sentences) >= max_sentences:
+		text = " ".join(sentences[:max_sentences])
+	elif len(sentences) == 1:
+		text = sentences[0]
+
+	# Reject residual meta/internal-style outputs.
+	if not text or any(token in text.lower() for token in ["thinking process", "analyze", "output json", "reasoning"]):
+		text = _fallback_speech_text(planned_action, obs, max_chars)
+
+	if len(text) > max_chars:
+		text = text[:max_chars].rstrip()
+		if text and text[-1].isalnum():
+			text += "."
+
+	return text
+
+
+def _build_speech(
+	agent: Any,
+	obs: Dict[str, Any],
+	raw_action: Any,
+	planned_action: Dict[str, Any],
+	max_chars: int,
+	mode: str,
+	reasoning_trace_max_chars: int,
+	max_sentences: int,
+) -> Dict[str, str]:
+	reasoning_trace = _extract_reasoning_trace(agent=agent, raw_action=raw_action)
+	reasoning_for_prompt = _shorten_reasoning_trace(reasoning_trace, max_chars=reasoning_trace_max_chars)
+	speech_prompt = (
+		"Public speech rewrite request:\n"
+		f"phase={obs.get('phase')}\n"
+		f"table_rank={obs.get('public_state', {}).get('table_rank')}\n"
+		f"pile_size={obs.get('public_state', {}).get('pile_size')}\n"
+		f"last_play={obs.get('public_state', {}).get('last_play')}\n"
+		f"planned_action={planned_action}\n"
+		f"reasoning_trace={reasoning_for_prompt}\n"
+		f"max_chars={max_chars}"
+	)
+
+	speech_text = ""
+	if mode == "llm_rewrite" and hasattr(agent, "generate_speech"):
+		try:
+			speech_text = agent.generate_speech(
+				observation=obs,
+				planned_action=planned_action,
+				reasoning_trace=reasoning_for_prompt,
+				max_chars=max_chars,
+			)
+		except Exception:
+			speech_text = ""
+
+	if not speech_text:
+		if reasoning_trace:
+			speech_text = reasoning_trace[:max_chars]
+		else:
+			speech_text = _fallback_speech_text(planned_action, obs, max_chars=max_chars)
+
+	speech_text = _clean_public_speech(
+		raw_text=speech_text,
+		planned_action=planned_action,
+		obs=obs,
+		max_chars=max_chars,
+		max_sentences=max_sentences,
+	)
+
+	return {
+		"speech_text": speech_text.strip(),
+		"speech_prompt": speech_prompt,
+		"reasoning_trace": reasoning_for_prompt,
 	}
 
 
@@ -138,6 +330,12 @@ def run_one_game(config: Dict[str, Any], log_save_path: str, seed_override=None,
 	ruleset = env_cfg.get("ruleset", "basic")
 	seed = int(seed_override if seed_override is not None else env_cfg.get("seed", 42))
 	game_id = env_cfg.get("game_id", "game_0001")
+	speech_cfg = env_cfg.get("speech_injection", {})
+	speech_enabled = bool(speech_cfg.get("enabled", True))
+	speech_mode = speech_cfg.get("mode", "llm_rewrite")
+	speech_max_chars = int(speech_cfg.get("max_chars", 180))
+	speech_max_sentences = int(speech_cfg.get("max_sentences", 2))
+	reasoning_trace_max_chars = int(speech_cfg.get("reasoning_trace_max_chars", 420))
 
 	os.makedirs(log_save_path, exist_ok=True)
 
@@ -160,6 +358,33 @@ def run_one_game(config: Dict[str, Any], log_save_path: str, seed_override=None,
 		agent = agents[player_id]
 		raw_action = agent.act(obs)
 		action = _sanitize_action(obs, raw_action)
+
+		if speech_enabled:
+			speech_bundle = _build_speech(
+				agent=agent,
+				obs=obs,
+				raw_action=raw_action,
+				planned_action=action,
+				max_chars=speech_max_chars,
+				mode=speech_mode,
+				reasoning_trace_max_chars=reasoning_trace_max_chars,
+				max_sentences=speech_max_sentences,
+			)
+			speech_text = speech_bundle["speech_text"]
+			if speech_text:
+				env.add_speech(player_id, speech_text)
+				env.record_player_trace(
+					player_id,
+					_make_speech_trace_row(
+						env=env,
+						obs=obs,
+						player_id=player_id,
+						speech_text=speech_text,
+						speech_prompt=speech_bundle["speech_prompt"],
+						reasoning_trace=speech_bundle["reasoning_trace"],
+					),
+				)
+
 		env.record_player_trace(player_id, _make_trace_row(env, obs, player_id, action))
 		_, _, done, _ = env.step(action)
 		step_count += 1

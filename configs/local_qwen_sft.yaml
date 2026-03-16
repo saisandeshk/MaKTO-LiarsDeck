@@ -5,6 +5,12 @@ env_config:
   seed: 42
   env_version: v0.1
   game_id: game_0001
+  speech_injection:
+    enabled: true
+    mode: llm_rewrite
+    max_chars: 420
+    max_sentences: 3
+    reasoning_trace_max_chars: 1400
 
 agent_config:
   default_model:

@@ -28,3 +28,23 @@ Current phase: {phase}
 You may produce optional public speech before/around your action.
 Return plain text only.
 """.strip()
+
+
+SPEECH_REWRITE_PROMPT = """
+You are playing Liar's Deck. Generate a short public table talk line.
+
+Context:
+- Phase: {phase}
+- Table rank: {table_rank}
+- Pile size: {pile_size}
+- Last play (public): {last_play}
+- Planned action: {planned_action}
+- Your private cards (do not reveal directly): {self_hand}
+- Internal reasoning trace: {reasoning_trace}
+
+Rules for speech:
+1) Keep it concise (1-2 sentences, <= {max_chars} chars).
+2) Sound strategic and natural.
+3) Never reveal exact private cards.
+4) Do not output JSON, only plain text.
+""".strip()
