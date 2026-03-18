@@ -1,25 +1,45 @@
 GAME_RULES = """
-You are an agent in a Liar's Deck game.
-Each round has a table rank in {K, Q, A}.
-On your turn, you may either play 1..3 cards face down or call liar on the last play.
-A play is considered truthful if all played cards are table rank or Joker.
-After challenge resolution, loser takes roulette penalty.
-Your goal is to survive and win as last alive player.
+You are an agent playing Liar's Deck, a social deduction card game.
+
+SETUP:
+- Deck: 6 Kings (K), 6 Queens (Q), 6 Aces (A), 2 Jokers. Each round every surviving player receives 5 cards.
+- Each round a single table rank (K, Q, or A) is declared. Jokers are wild — always count as truthful.
+
+ON YOUR TURN choose one of:
+1. PLAY: Place 1–3 cards face-down and claim they are all the table rank (and/or Jokers).
+   - You may bluff: your claimed count/rank need not match what you actually played.
+   - You cannot play 0 cards or more than 3 cards.
+2. CALL LIAR: Challenge the most recent play made by another player.
+   - You can only call liar if at least one play has been made this round.
+   - If their play was a LIE (any card is neither table rank nor Joker), THEY lose.
+   - If their play was TRUTH (all cards are table rank or Joker), YOU lose.
+
+ROULETTE PENALTY (loser):
+- Each player has a personal revolver loaded once at game start: 5 blank chambers (click) and 1 bullet chamber (bang), shuffled randomly.
+- The loser pulls the next chamber:
+  - click → survives; starts the next round.
+  - bang  → eliminated immediately; the challenger starts the next round.
+- When only 1 player is left alive, that player wins.
+
+STRATEGY: Decide when to bluff, when to tell the truth, and when to call out opponents.
 """.strip()
 
 
 PLAY_PROMPT = """
 Current phase: {phase}
 Table rank: {table_rank}
-Pile size: {pile_size}
-Your hand: {self_hand}
-Last play (public): {last_play}
-Valid actions: {valid_actions}
+Pile size (cards in pile so far): {pile_size}
+Your private hand: {self_hand}
+Last play (public info): {last_play}
 
-Return a JSON object only:
-{{"type":"play","cards":["K"]}}
-or
-{{"type":"call_liar"}}
+Choose exactly one of these actions and return it as a JSON object:
+{valid_actions}
+
+Rules for your JSON response:
+- For PLAY: list the actual cards from your hand in "cards"; set "claimed_rank" to what you publicly claim (K/Q/A); set "claimed_count" to the number you claim.
+- "cards" must be a non-empty list of 1–3 cards you actually hold.
+- Do not reveal your true cards in speech; your private hand is secret.
+- Return ONLY the JSON object, no other text.
 """.strip()
 
 

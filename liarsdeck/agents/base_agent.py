@@ -28,7 +28,7 @@ class RandomAgent(Agent):
 			if not hand:
 				return {"type": "call_liar"}
 			cards_count = min(len(hand), self.rng.randint(1, 3))
-			cards = hand[:cards_count]
+			cards = self.rng.sample(hand, cards_count)
 			return {"type": "play", "cards": cards}
 		if action_type == "call_liar":
 			return {"type": "call_liar"}

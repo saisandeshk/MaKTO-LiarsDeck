@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -uo pipefail
 
 if [[ $# -lt 3 ]]; then
 	echo "Usage: bash run_batch.sh <config_path> <output_root> <num_games> [base_seed] [run_name] [max_steps]"
@@ -29,6 +29,8 @@ fi
 
 mkdir -p "$OUTPUT_ROOT/$RUN_NAME"
 
+FAILED_GAMES=0
+
 echo "Starting batch run"
 echo "config: $CONFIG_PATH"
 echo "output: $OUTPUT_ROOT/$RUN_NAME"
@@ -42,11 +44,19 @@ for ((i=1; i<=NUM_GAMES; i++)); do
 	SEED=$((BASE_SEED + i - 1))
 
 	echo "[${i}/${NUM_GAMES}] running ${GAME_ID} seed=${SEED}"
-	PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}" python "$ROOT_DIR/run_battle.py" \
+	if PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}" python "$ROOT_DIR/run_battle.py" \
 		--config "$CONFIG_PATH" \
 		--log_save_path "$GAME_DIR" \
 		--seed "$SEED" \
-		--max_steps "$MAX_STEPS"
+		--max_steps "$MAX_STEPS"; then
+		echo "[${i}/${NUM_GAMES}] ${GAME_ID} OK"
+	else
+		echo "[${i}/${NUM_GAMES}] ${GAME_ID} FAILED (seed=${SEED}) — continuing batch"
+		FAILED_GAMES=$((FAILED_GAMES + 1))
+	fi
 done
 
-echo "Batch run complete: $OUTPUT_ROOT/$RUN_NAME"
+echo "Batch run complete: $OUTPUT_ROOT/$RUN_NAME  (failed=${FAILED_GAMES}/${NUM_GAMES})"
+if [[ "$FAILED_GAMES" -gt 0 ]]; then
+	exit 1
+fi

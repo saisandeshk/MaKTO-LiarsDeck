@@ -172,8 +172,14 @@ class LiarsDeckGame:
         if player_id != self.current_turn:
             return []
 
-        actions = [{"type": "play"}]
+        actions = []
+        if len(self.players[player_id]["hand"]) > 0:
+            actions.append({"type": "play"})
         if self.last_play is not None:
+            actions.append({"type": "call_liar"})
+        # Defensive fallback: if hand is empty and no challenge available, force call_liar
+        # (shouldn't occur in v0.1 with 5-card deals, but prevents infinite loop)
+        if not actions:
             actions.append({"type": "call_liar"})
         return actions
 

@@ -1,8 +1,9 @@
 import argparse
 import json
+import logging
 import os
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -52,14 +53,18 @@ def _build_agents(num_players: int, agent_config: Dict[str, Any], log_save_path:
 	return agents, player_meta
 
 
-def _make_trace_row(env: LiarsDeckTextEnvV0, obs: Dict[str, Any], player_id: int, action: Dict[str, Any]) -> Dict[str, Any]:
+_logger = logging.getLogger(__name__)
+
+
+def _make_trace_row(env: LiarsDeckTextEnvV0, obs: Dict[str, Any], player_id: int, action: Dict[str, Any], agent: Optional[Any] = None) -> Dict[str, Any]:
+	prompt = getattr(agent, "last_prompt", "") if agent is not None else ""
 	return {
 		"game_id": env.game.game_id,
 		"event_id": env.game.event_id + 1,
 		"player_id": player_id,
 		"phase": obs["phase"],
 		"message": obs["phase"],
-		"prompt": "runner_generated_prompt_placeholder",
+		"prompt": prompt or "runner_generated_prompt_placeholder",
 		"observation_summary": {
 			"table_rank": obs["public_state"]["table_rank"],
 			"pile_size": obs["public_state"]["pile_size"],
@@ -165,7 +170,7 @@ def _clean_public_speech(
 	text = re.sub(r"\{\s*\"type\"\s*:\s*\"(play|call_liar|speech)\".*?\}", "", text, flags=re.I | re.S)
 
 	lines = [line.strip() for line in text.splitlines() if line.strip()]
-	filtered: list[str] = []
+	filtered: List[str] = []
 	blocked_markers = [
 		"thinking process",
 		"analyze the request",
@@ -245,7 +250,8 @@ def _build_speech(
 				reasoning_trace=reasoning_for_prompt,
 				max_chars=max_chars,
 			)
-		except Exception:
+		except Exception as exc:
+			_logger.warning("speech generation failed, using fallback: %s", exc)
 			speech_text = ""
 
 	if not speech_text:
@@ -385,7 +391,7 @@ def run_one_game(config: Dict[str, Any], log_save_path: str, seed_override=None,
 					),
 				)
 
-		env.record_player_trace(player_id, _make_trace_row(env, obs, player_id, action))
+		env.record_player_trace(player_id, _make_trace_row(env, obs, player_id, action, agent))
 		_, _, done, _ = env.step(action)
 		step_count += 1
 

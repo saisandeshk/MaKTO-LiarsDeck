@@ -1,8 +1,7 @@
 import json
 import logging
-import re
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from liarsdeck.agents.base_agent import Agent, RandomAgent
 from liarsdeck.agents.prompt_template_v0 import GAME_RULES, PLAY_PROMPT, SPEECH_REWRITE_PROMPT
@@ -29,6 +28,18 @@ class LLMAgent(Agent):
     self.last_response_text = ""
     self.last_latency_ms = 0
 
+  @staticmethod
+  def _format_valid_actions(valid_actions: List) -> str:
+    """Convert valid_action tuples to JSON examples the LLM can copy directly."""
+    examples = []
+    for item in valid_actions:
+      action_type = item[0] if isinstance(item, (list, tuple)) else item.get("type", "")
+      if action_type == "play":
+        examples.append('{"type":"play","cards":["K"],"claimed_rank":"K","claimed_count":1}')
+      elif action_type == "call_liar":
+        examples.append('{"type":"call_liar"}')
+    return " OR ".join(examples) if examples else "none"
+
   def format_observation(self, observation: Dict[str, Any]) -> str:
     public_state = observation.get("public_state", {})
     private_state = observation.get("private_state", {})
@@ -39,7 +50,7 @@ class LLMAgent(Agent):
       pile_size=public_state.get("pile_size"),
       self_hand=private_state.get("self_hand", []),
       last_play=public_state.get("last_play"),
-      valid_actions=valid_actions,
+      valid_actions=self._format_valid_actions(valid_actions),
     )
 
   def _call_model(self, prompt: str) -> str:
@@ -57,10 +68,42 @@ class LLMAgent(Agent):
       return response.choices[0].message.content or ""
     return ""
 
+  @staticmethod
+  def _find_last_json_action(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Find the last valid JSON object with a 'type' key in text using a
+    stack-based brace-matching approach. Returns the last match so that
+    LLM reasoning preamble is ignored in favour of the final JSON output.
+    """
+    result = None
+    i = 0
+    while i < len(text):
+      if text[i] == "{":
+        depth = 0
+        j = i
+        while j < len(text):
+          if text[j] == "{":
+            depth += 1
+          elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+              candidate = text[i : j + 1]
+              try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict) and "type" in parsed:
+                  result = parsed  # keep scanning; prefer the last valid object
+              except Exception:
+                pass
+              break
+          j += 1
+      i += 1
+    return result
+
   def _parse_action(self, text: str, observation: Dict[str, Any]) -> Dict[str, Any]:
     if not text:
       return self.fallback_agent.act(observation)
 
+    # Fast path: the entire response is a JSON object.
     try:
       parsed = json.loads(text)
       if isinstance(parsed, dict) and "type" in parsed:
@@ -68,14 +111,10 @@ class LLMAgent(Agent):
     except Exception:
       pass
 
-    match = re.search(r"\{.*\}", text, flags=re.S)
-    if match:
-      try:
-        parsed = json.loads(match.group(0))
-        if isinstance(parsed, dict) and "type" in parsed:
-          return parsed
-      except Exception:
-        pass
+    # Robust path: scan for the last valid JSON action in the text.
+    found = self._find_last_json_action(text)
+    if found is not None:
+      return found
 
     return self.fallback_agent.act(observation)
 
